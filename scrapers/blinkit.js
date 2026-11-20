@@ -33,7 +33,7 @@ async function scrapeBlinkit(options = {}) {
         : (process.env.HEADLESS === "true");
 
     if (!fs.existsSync(BLINKIT_STATE_PATH)) {
-        console.warn(`[Blinkit Scraper] Warning: ${BLINKIT_STATE_PATH} not found. Run 'node login.js' first to save delivery location session.`);
+        console.warn(`[Blinkit Scraper] Warning: ${BLINKIT_STATE_PATH} not found. Delivery location might not be loaded.`);
     }
 
     const browser = await chromium.launch({
@@ -42,25 +42,33 @@ async function scrapeBlinkit(options = {}) {
         args: [
             "--disable-blink-features=AutomationControlled",
             "--no-sandbox",
-            "--disable-setuid-sandbox"
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage"
         ],
     });
 
     let context;
     try {
+        const contextOptions = {
+            viewport: { width: 1280, height: 800 },
+            userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            locale: "en-IN",
+            timezoneId: "Asia/Kolkata",
+        };
+
         if (fs.existsSync(BLINKIT_STATE_PATH)) {
-            context = await browser.newContext({
-                storageState: BLINKIT_STATE_PATH,
-                viewport: { width: 1280, height: 800 },
-                userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            });
-        } else {
-            context = await browser.newContext({
-                viewport: { width: 1280, height: 800 },
-            });
+            contextOptions.storageState = BLINKIT_STATE_PATH;
         }
 
+        context = await browser.newContext(contextOptions);
         const page = await context.newPage();
+
+        // Anti-detection patch for navigator.webdriver
+        await page.addInitScript(() => {
+            Object.defineProperty(navigator, "webdriver", {
+                get: () => undefined,
+            });
+        });
 
         console.log(`[Blinkit Scraper] Navigating to ${SEARCH_URL}...`);
         await page.goto(SEARCH_URL, {
@@ -68,10 +76,22 @@ async function scrapeBlinkit(options = {}) {
             timeout: options.timeout || 35000,
         });
 
+        const pageTitle = await page.title().catch(() => "unknown");
+        console.log(`[Blinkit Scraper] Navigation commit received. Title: "${pageTitle}", URL: ${page.url()}`);
+
         // Wait for product cards to render
-        await page.waitForSelector('div[id][role="button"], div[role="button"][tabindex="0"]', {
-            timeout: 20000,
-        });
+        try {
+            await page.waitForSelector('div[id][role="button"], div[role="button"][tabindex="0"]', {
+                timeout: 20000,
+            });
+        } catch (selectorErr) {
+            const titleNow = await page.title().catch(() => "unknown");
+            const urlNow = page.url();
+            const bodyPreview = await page.innerText("body").catch(() => "");
+            console.error(`[Blinkit Scraper] Selector timeout. Title: "${titleNow}", URL: "${urlNow}"`);
+            console.error(`[Blinkit Scraper] Page snippet: ${bodyPreview.slice(0, 300).replace(/\n+/g, " ")}`);
+            throw selectorErr;
+        }
 
         // Smooth scroll down to trigger lazy loading of cards and images
         await page.evaluate(async () => {
@@ -151,8 +171,8 @@ async function scrapeBlinkit(options = {}) {
                 stock: p.stock,
                 source: "Blinkit",
                 url: `https://blinkit.com/prn/${slug}/prid/${p.id}`,
-            });
-        }
+            };
+        });
 
         console.log(`[Blinkit Scraper] Successfully extracted ${products.length} products.`);
         return products;

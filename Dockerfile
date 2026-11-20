@@ -1,23 +1,21 @@
 # Use official Playwright image matching package.json version
 FROM mcr.microsoft.com/playwright:v1.62.0-jammy
 
-# Set working directory
-WORKDIR /app
+# Install xvfb for headful browser emulation (bypasses headless detection)
+RUN apt-get update && apt-get install -y xvfb && rm -rf /var/lib/apt/lists/*
 
-# Copy package manifests and install dependencies
+WORKDIR /app
 COPY package*.json ./
 RUN npm install
 RUN npx playwright install chromium
 
-# Copy project source code and session files
 COPY . .
 
-# Set environment defaults for cloud
 ENV PORT=3000
-ENV HEADLESS=true
+ENV HEADLESS=false
+ENV DISPLAY=:99
 
-# Expose healthcheck port
 EXPOSE 3000
 
-# Start tracker and web server
-CMD ["node", "index.js"]
+# Start with xvfb-run for full GUI headful browser emulation in Linux
+CMD ["xvfb-run", "--server-args=-screen 0 1280x800x24 -ac", "node", "index.js"]
