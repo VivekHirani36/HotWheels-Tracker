@@ -6,11 +6,6 @@ const fs = require("fs");
 const BLINKIT_STATE_PATH = path.join(__dirname, "..", "blinkit-state.json");
 const SEARCH_URL = "https://blinkit.com/s/?q=hot%20wheels";
 
-/**
- * Normalizes a product name into a clean URL slug
- * @param {string} name 
- * @returns {string}
- */
 function createSlug(name) {
     if (!name) return "product";
     return name
@@ -21,24 +16,18 @@ function createSlug(name) {
 
 /**
  * Scrapes Hot Wheels products from Blinkit.
- * 
- * @param {object} options
- * @param {boolean} [options.headless=false] - Run headless or with visible window
- * @param {number} [options.timeout=35000] - Navigation timeout in ms
- * @returns {Promise<Array<object>>} Standardized product objects
  */
 async function scrapeBlinkit(options = {}) {
     const headless = options.headless !== undefined 
         ? options.headless 
-        : (process.env.HEADLESS === "true");
+        : (process.env.HEADLESS !== "false");
 
     if (!fs.existsSync(BLINKIT_STATE_PATH)) {
-        console.warn(`[Blinkit Scraper] Warning: ${BLINKIT_STATE_PATH} not found. Delivery location might not be loaded.`);
+        console.warn(`[Blinkit Scraper] Warning: ${BLINKIT_STATE_PATH} not found.`);
     }
 
     const browser = await chromium.launch({
         headless,
-        slowMo: 100,
         args: [
             "--disable-blink-features=AutomationControlled",
             "--no-sandbox",
@@ -51,7 +40,7 @@ async function scrapeBlinkit(options = {}) {
     try {
         const contextOptions = {
             viewport: { width: 1280, height: 800 },
-            userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             locale: "en-IN",
             timezoneId: "Asia/Kolkata",
         };
@@ -76,13 +65,15 @@ async function scrapeBlinkit(options = {}) {
             timeout: options.timeout || 35000,
         });
 
+        // Allow initial hydration
+        await page.waitForTimeout(3000);
         const pageTitle = await page.title().catch(() => "unknown");
-        console.log(`[Blinkit Scraper] Navigation commit received. Title: "${pageTitle}", URL: ${page.url()}`);
+        console.log(`[Blinkit Scraper] Page loaded. Title: "${pageTitle}", URL: ${page.url()}`);
 
         // Wait for product cards to render
         try {
             await page.waitForSelector('div[id][role="button"], div[role="button"][tabindex="0"]', {
-                timeout: 20000,
+                timeout: 25000,
             });
         } catch (selectorErr) {
             const titleNow = await page.title().catch(() => "unknown");
@@ -93,7 +84,7 @@ async function scrapeBlinkit(options = {}) {
             throw selectorErr;
         }
 
-        // Smooth scroll down to trigger lazy loading of cards and images
+        // Smooth scroll to trigger lazy loading of cards and images
         await page.evaluate(async () => {
             const distance = 600;
             const scrollHeight = document.body.scrollHeight;
@@ -101,7 +92,6 @@ async function scrapeBlinkit(options = {}) {
                 window.scrollBy(0, distance);
                 await new Promise((r) => setTimeout(r, 120));
             }
-            // Scroll back up to ensure top images are refreshed in viewport
             window.scrollTo(0, 0);
         });
 
@@ -116,14 +106,11 @@ async function scrapeBlinkit(options = {}) {
                     const text = c.innerText || "";
                     const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
 
-                    // Price line contains ₹
                     const priceLine = lines.find((l) => l.includes("₹")) || "";
                     if (!priceLine) return null;
 
-                    // Delivery time
                     const deliveryLine = lines.find((l) => /\b\d+\s*(mins?|minutes?|m)\b/i.test(l)) || "10-15 mins";
 
-                    // Product title/name
                     const nameEl = c.querySelector(".tw-line-clamp-2") || 
                                    c.querySelector('[style*="line-clamp"]') || 
                                    c.querySelector("div[title]");
@@ -132,11 +119,9 @@ async function scrapeBlinkit(options = {}) {
                         name = lines.find((l) => l.toLowerCase().includes("hot wheels")) || lines[1] || lines[0] || "Hot Wheels Item";
                     }
 
-                    // Image URL
                     const img = c.querySelector("img");
                     const image = img ? (img.src || img.getAttribute("src") || img.getAttribute("data-src") || "") : "";
 
-                    // Stock status
                     const isOutOfStock = lines.some((l) => /out of stock/i.test(l));
                     const hasAdd = lines.some((l) => /^(ADD|Add)$/i.test(l) || l.includes("ADD"));
                     const stock = hasAdd && !isOutOfStock;
@@ -153,7 +138,6 @@ async function scrapeBlinkit(options = {}) {
                 .filter(Boolean);
         });
 
-        // Deduplicate and finalize URL construction
         const seenIds = new Set();
         const products = [];
 
@@ -171,8 +155,8 @@ async function scrapeBlinkit(options = {}) {
                 stock: p.stock,
                 source: "Blinkit",
                 url: `https://blinkit.com/prn/${slug}/prid/${p.id}`,
-            };
-        });
+            });
+        }
 
         console.log(`[Blinkit Scraper] Successfully extracted ${products.length} products.`);
         return products;
