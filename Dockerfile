@@ -1,5 +1,5 @@
-# Use official Playwright image containing Chromium and all Linux dependencies
-FROM mcr.microsoft.com/playwright:v1.42.0-jammy
+# Use official Playwright image matching package.json version
+FROM mcr.microsoft.com/playwright:v1.62.0-jammy
 
 # Set working directory
 WORKDIR /app
@@ -7,6 +7,7 @@ WORKDIR /app
 # Copy package manifests and install dependencies
 COPY package*.json ./
 RUN npm install
+RUN npx playwright install chromium
 
 # Copy project source code and session files
 COPY . .
